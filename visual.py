@@ -38,20 +38,33 @@ cable_types = sorted(df["CABLE_TYPE"].dropna().unique())
 selected_cable_types = st.multiselect("Select Network Type(s):", cable_types, default=[cable_types[0]])
 
 # ---- FEEDER_ID multi-select for selected cable types ----
+# ---- FEEDER_ID multi-select for selected cable types ----
 feeders_list = sorted(df[df["CABLE_TYPE"].isin(selected_cable_types)]["FEEDER_ID"].fillna("NULL").unique().tolist())
 if "NULL" not in feeders_list:
     feeders_list.append("NULL")
-selected_feeders = st.multiselect("Select FEEDER ID(s):", feeders_list, default=[feeders_list[0]])
 
-view_df = df[
-    (df["CABLE_TYPE"].isin(selected_cable_types)) &
-    (df["FEEDER_ID"].isin(selected_feeders))
-].copy()
+# ADD "All" as first option!
+feeder_options = ["All"] + feeders_list
+selected_feeders = st.multiselect("Select FEEDER ID(s):", feeder_options, default=["All"])
+
+# Adjust filtering logic: If "All" in selection, use all feeders for selected cable types
+if "All" in selected_feeders:
+    view_df = df[df["CABLE_TYPE"].isin(selected_cable_types)].copy()
+else:
+    view_df = df[
+        (df["CABLE_TYPE"].isin(selected_cable_types)) &
+        (df["FEEDER_ID"].isin(selected_feeders))
+    ].copy()
 
 view_df["SOURCE_SS"] = view_df["SOURCE_SS"].fillna("UNKNOWN").astype(str)
 view_df["DESTINATION_SS"] = view_df["DESTINATION_SS"].fillna("UNKNOWN").astype(str)
 
-MAX_EDGES = 50
+MAX_EDGES = 500
+MAX_EDGES = st.number_input(
+    "Maximum number of edges to show (for performance):",
+    min_value=1, max_value=50000, value=MAX_EDGES, step=1000,
+    help="Limits the number of edges shown in the network visualization for performance reasons."
+)
 if len(view_df) > MAX_EDGES:
     st.warning(f"Network has {len(view_df)} edges! Only first {MAX_EDGES} shown for clarity.")
     view_df = view_df.head(MAX_EDGES)
@@ -81,6 +94,34 @@ for idx, row in view_df.iterrows():
     edge_dict = row.to_dict()
     edge_dict.update({"src": src, "dst": dst, "is_multi": is_multi, "color": color})
     edges.append(edge_dict)
+# ---- EDGE TYPE FILTER ----
+edge_type = st.selectbox(
+    "Select which type of edges to show:",
+    ["All", "Self-loop only", "Multiple edges only", "Single edges only"],
+    index=0
+)
+
+# Identify all self-loops, multi, single
+pair_counts = view_df.groupby(["SOURCE_SS", "DESTINATION_SS"]).size()
+multi_edge_pairs = pair_counts[pair_counts > 1].index.tolist()
+single_edge_pairs = pair_counts[pair_counts == 1].index.tolist()
+
+def edge_filter(row):
+    src = row["SOURCE_SS"]
+    dst = row["DESTINATION_SS"]
+    if edge_type == "All":
+        return True
+    elif edge_type == "Self-loop only":
+        return src == dst
+    elif edge_type == "Multiple edges only":
+        return (src, dst) in multi_edge_pairs
+    elif edge_type == "Single edges only":
+        return (src, dst) in single_edge_pairs
+    return True
+
+# Apply edge filter to the DataFrame
+view_df = view_df[view_df.apply(edge_filter, axis=1)].copy()
+
 
 G = nx.MultiDiGraph()
 for e in edges:
